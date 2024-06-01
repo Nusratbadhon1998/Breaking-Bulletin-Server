@@ -43,7 +43,6 @@ const verifyToken = (req, res, next) => {
         console.log(err);
         return res.status(401).send({ message: "unauthorized access" });
       }
-      console.log(decoded);
 
       req.user = decoded;
       next();
@@ -163,6 +162,50 @@ async function run() {
 
     app.get("/articles", verifyToken, verifyAdmin, async (req, res) => {
       const result = await articlesCollection.find().toArray();
+      res.send(result);
+    });
+    app.put(
+      "/articles/:articleId",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const articleId = req.params.articleId;
+        const declineReason= req.body.declineReason
+        const query = { _id: new ObjectId(articleId) };
+        const options = { upsert: true };
+        const updateDoc = {
+          $set: {
+            declineReason,
+          },
+        };
+        const result = await articlesCollection.updateOne(
+          query,
+          updateDoc,
+          options
+        );
+
+        res.send(result);
+      }
+    );
+    app.patch("/articles/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const newStatus = req.body.status;
+      const isPremium = req.body.isPremium;
+      console.log(newStatus, isPremium);
+
+      const query = { _id: new ObjectId(id) };
+      let updateDoc = {};
+      if (isPremium) {
+        updateDoc = {
+          $set: { premium: isPremium },
+        };
+      } else if (newStatus) {
+        updateDoc = {
+          $set: { status: newStatus },
+        };
+      }
+
+      const result = await articlesCollection.updateOne(query, updateDoc);
       res.send(result);
     });
 
