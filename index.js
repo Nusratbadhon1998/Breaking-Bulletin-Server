@@ -51,11 +51,14 @@ const verifyToken = (req, res, next) => {
   }
 };
 
+
+
 async function run() {
   try {
     const database = client.db("breakingBulletinDB");
     const newsCollection = database.collection("news");
     const usersCollection = database.collection("users");
+    const publishersCollection = database.collection("publishers");
 
     // jwt generate
     app.post("/jwt", async (req, res) => {
@@ -79,6 +82,19 @@ async function run() {
         res.status(500).send(err);
       }
     });
+
+    // Verify admin
+
+ 
+    const verifyAdmin = async (req, res, next) => {
+        const user = req.user
+        const query = { email: user?.email }
+        const result = await usersCollection.findOne(query)
+        if (!result || result?.role !== 'admin')
+          return res.status(401).send({ message: 'unauthorized access!!' })
+    
+        next()
+      }
     // admin routes
     app.put("/users", async (req, res) => {
       const user = req.body;
@@ -114,6 +130,17 @@ async function run() {
       const isAdmin=(result.role)
       res.send(isAdmin);
     });
+
+    app.post('/publishers',verifyToken,verifyAdmin,async(req,res)=>{
+        const publisherData= req.body;
+        const query = {
+            publisherName: { $regex: new RegExp(`^${publisherData.publisherName}$`, 'i') }
+          }    
+        const alreadyExist= await publishersCollection.findOne(query)
+        if (alreadyExist) return res.send({message:"ALready Exist"})
+        const result= await publishersCollection.insertOne(publisherData)
+        res.send(result)
+    })
 
     
     app.get("/", (req, res) => {
