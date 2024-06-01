@@ -51,12 +51,10 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-
-
 async function run() {
   try {
     const database = client.db("breakingBulletinDB");
-    const newsCollection = database.collection("news");
+    const articlesCollection = database.collection("articles");
     const usersCollection = database.collection("users");
     const publishersCollection = database.collection("publishers");
 
@@ -85,16 +83,15 @@ async function run() {
 
     // Verify admin
 
- 
     const verifyAdmin = async (req, res, next) => {
-        const user = req.user
-        const query = { email: user?.email }
-        const result = await usersCollection.findOne(query)
-        if (!result || result?.role !== 'admin')
-          return res.status(401).send({ message: 'unauthorized access!!' })
-    
-        next()
-      }
+      const user = req.user;
+      const query = { email: user?.email };
+      const result = await usersCollection.findOne(query);
+      if (!result || result?.role !== "admin")
+        return res.status(401).send({ message: "unauthorized access!!" });
+
+      next();
+    };
     // admin routes
     app.put("/users", async (req, res) => {
       const user = req.body;
@@ -127,22 +124,48 @@ async function run() {
     app.get("/user/admin/:email", async (req, res) => {
       const email = req.params.email;
       const result = await usersCollection.findOne({ email });
-      const isAdmin=(result.role)
+      const isAdmin = result.role;
       res.send(isAdmin);
     });
 
-    app.post('/publishers',verifyToken,verifyAdmin,async(req,res)=>{
-        const publisherData= req.body;
-        const query = {
-            publisherName: { $regex: new RegExp(`^${publisherData.publisherName}$`, 'i') }
-          }    
-        const alreadyExist= await publishersCollection.findOne(query)
-        if (alreadyExist) return res.send({message:"ALready Exist"})
-        const result= await publishersCollection.insertOne(publisherData)
-        res.send(result)
-    })
+    app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
+      const publisherData = req.body;
+      const query = {
+        publisherName: {
+          $regex: new RegExp(`^${publisherData.publisherName}$`, "i"),
+        },
+      };
+      const alreadyExist = await publishersCollection.findOne(query);
+      if (alreadyExist) return res.send({ message: "ALready Exist" });
+      const result = await publishersCollection.insertOne(publisherData);
+      res.send(result);
+    });
 
-    
+    app.get("/publishers", verifyToken, async (req, res) => {
+      const result = await publishersCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.post("/articles", verifyToken, async (req, res) => {
+      const data = req.body;
+
+      const articleData = {
+        ...data,
+        postedDate: Date(),
+        status: "Pending",
+        premium: "no",
+      };
+
+      const result = await articlesCollection.insertOne(articleData);
+
+      res.send(result);
+    });
+
+    app.get("/articles", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await articlesCollection.find().toArray();
+      res.send(result);
+    });
+
     app.get("/", (req, res) => {
       res.send("Server Running for Assignment 12");
     });
