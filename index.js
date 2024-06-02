@@ -160,10 +160,41 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/articles", verifyToken, verifyAdmin, async (req, res) => {
-      const result = await articlesCollection.find().toArray();
-      res.send(result);
+    app.get("/articles", verifyToken , async (req, res) => {
+      
+      const publisher= req.query.publisher
+      const tag= req.query.tag
+      const sort= req.query.sort
+      const search= req.query.search
+
+      let query = {
+        title: { $regex: search, $options: 'i' },
+      }
+      if (publisher) query.publisher = publisher
+      if (tag) query.tag = tag
+      let options = {}
+      if (sort) options = { sort: { postedDate: sort === 'asc' ? 1 : -1 } }
+      const result = await articlesCollection
+        .find(query, options)
+        .toArray()
+
+      res.send(result)
+   
     });
+
+    app.get('/articles-count', async (req, res) => {
+      const publisher = req.query.publisher
+      const tag = req.query.tag
+      const search = req.query.search
+      let query = {
+        title: { $regex: search, $options: 'i' },
+      }
+      if (publisher) query.publisher = publisher
+      if (tag) query.tag = tag
+      const count = await articlesCollection.countDocuments(query)
+
+      res.send({ count })
+    })
     app.put(
       "/articles/:articleId",
       verifyToken,
@@ -208,6 +239,8 @@ async function run() {
       const result = await articlesCollection.updateOne(query, updateDoc);
       res.send(result);
     });
+
+   
 
     app.get("/", (req, res) => {
       res.send("Server Running for Assignment 12");
