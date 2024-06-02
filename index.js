@@ -110,23 +110,31 @@ async function run() {
           timestamp: Date.now(),
         },
       };
-      const result = await usersCollection.updateOne(query, updateDoc, options);
+      try {
+        const result = await usersCollection.updateOne(
+          query,
+          updateDoc,
+          options
+        );
 
-      res.send(result);
+        res.send(result);
+      } catch (err) {
+        res.status(500).send("Internal Issue");
+      }
     });
 
-    app.get("/user/:email", async (req, res) => {
+    app.get("/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       const result = await usersCollection.findOne({ email });
       res.send(result);
     });
-    app.get("/user/admin/:email", async (req, res) => {
-      const email = req.params.email;
-      const result = await usersCollection.findOne({ email });
-      const isAdmin = result.role;
-      res.send(isAdmin);
-    });
 
+
+    // Publisher Api
+    app.get("/publishers", verifyToken, async (req, res) => {
+      const result = await publishersCollection.find().toArray();
+      res.send(result);
+    });
     app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
       const publisherData = req.body;
       const query = {
@@ -140,11 +148,31 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/publishers", verifyToken, async (req, res) => {
-      const result = await publishersCollection.find().toArray();
+    // Articles Api
+
+    app.get("/articles", verifyToken, async (req, res) => {
+      const publisher = req.query.publisher;
+      const tag = req.query.tag;
+      const sort = req.query.sort;
+      const search = req.query.search;
+
+      let query = {
+        title: { $regex: search, $options: "i" },
+      };
+      if (publisher) query.publisher = publisher;
+      if (tag) query.tag = tag;
+      let options = {};
+      if (sort) options = { sort: { postedDate: sort === "asc" ? 1 : -1 } };
+
+      const result = await articlesCollection.find(query, options).toArray();
       res.send(result);
     });
+    app.get("/all-articles", verifyToken,verifyAdmin, async (req, res) => {
+     const result= await articlesCollection.find().toArray()
 
+     
+      res.send(result);
+    });
     app.post("/articles", verifyToken, async (req, res) => {
       const data = req.body;
 
@@ -159,49 +187,71 @@ async function run() {
 
       res.send(result);
     });
-
-    app.get("/articles", verifyToken , async (req, res) => {
-      
-      const publisher= req.query.publisher
-      const tag= req.query.tag
-      const sort= req.query.sort
-      const search= req.query.search
-
+    app.get("/articles-count", async (req, res) => {
+      const publisher = req.query.publisher;
+      const tag = req.query.tag;
+      const search = req.query.search;
       let query = {
-        title: { $regex: search, $options: 'i' },
-      }
-      if (publisher) query.publisher = publisher
-      if (tag) query.tag = tag
-      let options = {}
-      if (sort) options = { sort: { postedDate: sort === 'asc' ? 1 : -1 } }
-      const result = await articlesCollection
-        .find(query, options)
-        .toArray()
+        title: { $regex: search, $options: "i" },
+      };
+      if (publisher) query.publisher = publisher;
+      if (tag) query.tag = tag;
+      const count = await articlesCollection.countDocuments(query);
 
-      res.send(result)
-   
+      res.send({ count });
+    });
+    app.get("/articles/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      console.log(email)
+      if (req.user.email !== email)
+        return res.status(403).send({ message: "Unauthorized access" });
+      const query = { authorEmail:email };
+      try {
+        const result = await articlesCollection.find(query).toArray();
+        res.send(result);
+      } catch {
+        res.status(500).send("Internal Issue");
+      }
+    });
+    app.get("/article/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      try {
+        const result = await articlesCollection.findOne(query);
+        res.send(result);
+      } catch {
+        res.status(500).send("Internal Problem");
+      }
+    });
+    app.put("/article/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const options = { upsert: true };
+      const updateDoc = {
+        $inc: { viewCount: 1 },
+      };
+      try {
+        const result = await articlesCollection.updateOne(
+          query,
+          updateDoc,
+          options
+        );
+
+        res.send(result);
+      } catch (error) {
+        console.log(error);
+        res.status(500).send("Internal Server Error");
+      }
     });
 
-    app.get('/articles-count', async (req, res) => {
-      const publisher = req.query.publisher
-      const tag = req.query.tag
-      const search = req.query.search
-      let query = {
-        title: { $regex: search, $options: 'i' },
-      }
-      if (publisher) query.publisher = publisher
-      if (tag) query.tag = tag
-      const count = await articlesCollection.countDocuments(query)
-
-      res.send({ count })
-    })
+    // For admin to update
     app.put(
       "/articles/:articleId",
       verifyToken,
       verifyAdmin,
       async (req, res) => {
         const articleId = req.params.articleId;
-        const declineReason= req.body.declineReason
+        const declineReason = req.body.declineReason;
         const query = { _id: new ObjectId(articleId) };
         const options = { upsert: true };
         const updateDoc = {
@@ -239,8 +289,6 @@ async function run() {
       const result = await articlesCollection.updateOne(query, updateDoc);
       res.send(result);
     });
-
-   
 
     app.get("/", (req, res) => {
       res.send("Server Running for Assignment 12");
