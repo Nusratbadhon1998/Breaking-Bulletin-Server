@@ -6,6 +6,7 @@ const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT || 5000;
 const app = express();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const corsOptions = {
   origin: ["http://localhost:5173", "http://localhost:5174"],
@@ -94,22 +95,26 @@ async function run() {
     // admin routes
     app.put("/users", async (req, res) => {
       const user = req.body;
-
       const query = { email: user?.email };
+      const options = { upsert: true };
 
       const isUserExist = await usersCollection.findOne(query);
+      let premiumReset = false;
 
-      if (isUserExist) {
-        return res.send({ message: "User already exist" });
-      }
-
-      const options = { upsert: true };
-      const updateDoc = {
+      let updateDoc = {
         $set: {
           ...user,
           timestamp: Date.now(),
         },
       };
+
+      if (isUserExist) {
+        if (new Date(user.loginTime) > new Date(isUserExist.premiumTaken)) {
+          updateDoc = { $set: { premiumTaken: null } };
+          premiumReset = true;
+        }
+      }
+
       try {
         const result = await usersCollection.updateOne(
           query,
@@ -117,18 +122,40 @@ async function run() {
           options
         );
 
-        res.send(result);
+        res.send({result,premiumReset});
       } catch (err) {
         res.status(500).send("Internal Issue");
       }
     });
 
+    app.patch("/user/:email", async (req, res) => {
+      const email = req.params.email;
+      const { premiumTakenDate } = req.body;
+
+      console.log(premiumTakenDate);
+
+      const query = { email };
+      const updateDoc = {
+        $set: {
+          premiumTaken: premiumTakenDate,
+        },
+      };
+      try {
+        const result = await usersCollection.updateOne(query, updateDoc);
+        res.send(result);
+      } catch (err) {
+        console.log(err);
+      }
+    });
+
     app.get("/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
+      if (req.user.email !== email)
+        return res.status(403).send({ message: "Forbidden access" });
+
       const result = await usersCollection.findOne({ email });
       res.send(result);
     });
-
 
     // Publisher Api
     app.get("/publishers", verifyToken, async (req, res) => {
@@ -167,10 +194,9 @@ async function run() {
       const result = await articlesCollection.find(query, options).toArray();
       res.send(result);
     });
-    app.get("/all-articles", verifyToken,verifyAdmin, async (req, res) => {
-     const result= await articlesCollection.find().toArray()
+    app.get("/all-articles", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await articlesCollection.find().toArray();
 
-     
       res.send(result);
     });
     app.post("/articles", verifyToken, async (req, res) => {
@@ -202,10 +228,10 @@ async function run() {
     });
     app.get("/articles/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-      console.log(email)
+      console.log(email);
       if (req.user.email !== email)
-        return res.status(403).send({ message: "Unauthorized access" });
-      const query = { authorEmail:email };
+        return res.status(401).send({ message: "Unauthorized access" });
+      const query = { authorEmail: email };
       try {
         const result = await articlesCollection.find(query).toArray();
         res.send(result);
@@ -272,7 +298,6 @@ async function run() {
       const id = req.params.id;
       const newStatus = req.body.status;
       const isPremium = req.body.isPremium;
-      console.log(newStatus, isPremium);
 
       const query = { _id: new ObjectId(id) };
       let updateDoc = {};
@@ -288,6 +313,21 @@ async function run() {
 
       const result = await articlesCollection.updateOne(query, updateDoc);
       res.send(result);
+    });
+    // Payment intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      console.log(amount, "amount inside the intent");
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
     });
 
     app.get("/", (req, res) => {
