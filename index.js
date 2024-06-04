@@ -101,18 +101,20 @@ async function run() {
       const isUserExist = await usersCollection.findOne(query);
       let premiumReset = false;
 
-      let updateDoc = {
-        $set: {
-          ...user,
-          timestamp: Date.now(),
-        },
-      };
-
+      let updateDoc = {};
       if (isUserExist) {
         if (new Date(user.loginTime) > new Date(isUserExist.premiumTaken)) {
-          updateDoc = { $set: { premiumTaken: null } };
+          updateDoc = { $set: { ...user, premiumTaken: null } };
           premiumReset = true;
         }
+      } else {
+        updateDoc = {
+          $set: {
+            ...user,
+            role: "user",
+            timestamp: Date.now(),
+          },
+        };
       }
 
       try {
@@ -122,12 +124,15 @@ async function run() {
           options
         );
 
-        res.send({result,premiumReset});
+        res.send({ result, premiumReset });
       } catch (err) {
         res.status(500).send("Internal Issue");
       }
     });
-
+    app.get("/users", async (req, res) => {
+      const result = await usersCollection.find().toArray();
+      res.send(result);
+    });
     app.patch("/user/:email", async (req, res) => {
       const email = req.params.email;
       const { premiumTakenDate } = req.body;
@@ -162,6 +167,29 @@ async function run() {
       const result = await publishersCollection.find().toArray();
       res.send(result);
     });
+    app.get("/articles-viewCount", verifyToken, async (req, res) => {
+      try {
+        const articles = await articlesCollection
+          .find(
+            {},
+            {
+              projection: {
+                viewCount: 1,
+                imageURL: 1,
+              },
+            }
+          )
+          .toArray();
+
+        articles.sort((a, b) => b.viewCount - a.viewCount);
+
+        res.send(articles);
+      } catch (error) {
+        console.error("Error fetching and sorting articles:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
     app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
       const publisherData = req.body;
       const query = {
@@ -183,9 +211,9 @@ async function run() {
       const sort = req.query.sort;
       const search = req.query.search;
 
-      let query = {
-        title: { $regex: search, $options: "i" },
-      };
+      let query = {};
+
+      if (search) query.title = { $regex: search, $options: "i" };
       if (publisher) query.publisher = publisher;
       if (tag) query.tag = tag;
       let options = {};
@@ -207,6 +235,7 @@ async function run() {
         postedDate: Date(),
         status: "Pending",
         premium: "no",
+        viewCount: 0,
       };
 
       const result = await articlesCollection.insertOne(articleData);
@@ -271,6 +300,50 @@ async function run() {
     });
 
     // For admin to update
+    // app.get("/admin-stat", async (req, res) => {
+    //   const articles = await articlesCollection
+    //     .find(
+    //       {},
+    //       {
+    //         projection: {
+    //           publisher: 1,
+    //         },
+    //       }
+    //     )
+    //     .toArray();
+
+    //   res.send(articles);
+    // });
+    app.get("/admin-stat", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const publisherCounts = await articlesCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$publisher",
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        const chartData = publisherCounts.map((publisher) => {
+          const data = [publisher._id, publisher.count];
+          return data;
+        });
+        chartData.unshift(["Publisher Name", "Publication article"]);
+
+        const totalUsers = await usersCollection.countDocuments();
+        const totalArticles = await articlesCollection.countDocuments();
+  
+        res.send({
+          chartData,
+        });
+      } catch (error) {
+        console.error("Error fetching and counting publishers:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
     app.put(
       "/articles/:articleId",
       verifyToken,
