@@ -107,7 +107,7 @@ async function run() {
 
       next();
     };
-    // admin routes
+    // First time user create and update premiumTaken fiend
     app.put("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user?.email };
@@ -115,7 +115,6 @@ async function run() {
 
       const isUserExist = await usersCollection.findOne(query);
       let premiumReset = false;
-
       let updateDoc = {};
       if (isUserExist) {
         if (new Date(user.loginTime) > new Date(isUserExist.premiumTaken)) {
@@ -144,10 +143,12 @@ async function run() {
         res.status(500).send("Internal Issue");
       }
     });
-    app.get("/users", async (req, res) => {
+    // For admin
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const result = await usersCollection.find().toArray();
       res.send(result);
     });
+
     app.patch("/user/:email", async (req, res) => {
       const email = req.params.email;
       const { premiumTakenDate } = req.body;
@@ -177,32 +178,70 @@ async function run() {
       res.send(result);
     });
 
-    app.get('/users-count',async(req,res)=>{
+    app.get("/users-count", async (req, res) => {
       const totalUsers = await usersCollection.countDocuments();
       const normalUsers = await usersCollection
-      .aggregate([
-        {
-          $group: {
-            _id: "$role",
-            count: { $sum: 1 },
+        .aggregate([
+          {
+            $group: {
+              _id: "$role",
+              count: { $sum: 1 },
+            },
           },
-        },
-        {
-          $project: {
-            role: "$_id", 
-            count: 1,
-            _id: 0, 
+          {
+            $project: {
+              role: "$_id",
+              count: 1,
+              _id: 0,
+            },
           },
-        },
-      ]).toArray()
-      const normalUserCount=(normalUsers).filter(user=>user.role==="user")[0].count
-      const premiumUsersCount = await usersCollection.countDocuments({ premiumTaken: { $ne: null } });
-      res.send({totalUsers,normalUserCount,premiumUsersCount})
-
-    })
+        ])
+        .toArray();
+      const normalUserCount = normalUsers.filter(
+        (user) => user.role === "user"
+      )[0].count;
+      const premiumUsersCount = await usersCollection.countDocuments({
+        premiumTaken: { $ne: null },
+      });
+      res.send({ totalUsers, normalUserCount, premiumUsersCount });
+    });
     // Publisher Api
     app.get("/publishers", async (req, res) => {
       const result = await publishersCollection.find().toArray();
+      res.send(result);
+    });
+
+    app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
+      const publisherData = req.body;
+      const query = {
+        publisherName: {
+          $regex: new RegExp(`^${publisherData.publisherName}$`, "i"),
+        },
+      };
+      const alreadyExist = await publishersCollection.findOne(query);
+      if (alreadyExist) return res.send({ message: "ALready Exist" });
+      const result = await publishersCollection.insertOne(publisherData);
+      res.send(result);
+    });
+
+    // Articles Api
+
+    // Need to change
+    app.get("/articles", verifyToken, async (req, res) => {
+      const publisher = req.query.publisher;
+      const tag = req.query.tag;
+      const sort = req.query.sort;
+      const search = req.query.search;
+
+      let query = {};
+
+      if (search) query.title = { $regex: search, $options: "i" };
+      if (publisher) query.publisher = publisher;
+      if (tag) query.tag = tag;
+      let options = {};
+      if (sort) options = { sort: { postedDate: sort === "asc" ? 1 : -1 } };
+
+      const result = await articlesCollection.find(query, options).toArray();
       res.send(result);
     });
     app.get("/trending-articles", async (req, res) => {
@@ -227,39 +266,6 @@ async function run() {
         res.status(500).json({ message: "Internal server error" });
       }
     });
-
-    app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
-      const publisherData = req.body;
-      const query = {
-        publisherName: {
-          $regex: new RegExp(`^${publisherData.publisherName}$`, "i"),
-        },
-      };
-      const alreadyExist = await publishersCollection.findOne(query);
-      if (alreadyExist) return res.send({ message: "ALready Exist" });
-      const result = await publishersCollection.insertOne(publisherData);
-      res.send(result);
-    });
-
-    // Articles Api
-
-    app.get("/articles", verifyToken, async (req, res) => {
-      const publisher = req.query.publisher;
-      const tag = req.query.tag;
-      const sort = req.query.sort;
-      const search = req.query.search;
-
-      let query = {};
-
-      if (search) query.title = { $regex: search, $options: "i" };
-      if (publisher) query.publisher = publisher;
-      if (tag) query.tag = tag;
-      let options = {};
-      if (sort) options = { sort: { postedDate: sort === "asc" ? 1 : -1 } };
-
-      const result = await articlesCollection.find(query, options).toArray();
-      res.send(result);
-    });
     app.get("/all-articles", verifyToken, verifyAdmin, async (req, res) => {
       const result = await articlesCollection.find().toArray();
 
@@ -280,19 +286,7 @@ async function run() {
 
       res.send(result);
     });
-    app.get("/articles-count", async (req, res) => {
-      const publisher = req.query.publisher;
-      const tag = req.query.tag;
-      const search = req.query.search;
-      let query = {
-        title: { $regex: search, $options: "i" },
-      };
-      if (publisher) query.publisher = publisher;
-      if (tag) query.tag = tag;
-      const count = await articlesCollection.countDocuments(query);
-
-      res.send({ count });
-    });
+    // get specific user article
     app.get("/articles/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       if (req.user.email !== email)
@@ -305,6 +299,7 @@ async function run() {
         res.status(500).send("Internal Issue");
       }
     });
+    // get specific article
     app.get("/article/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -317,11 +312,21 @@ async function run() {
     });
     app.put("/article/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
+      const articleData = req?.body;
       const query = { _id: new ObjectId(id) };
       const options = { upsert: true };
-      const updateDoc = {
+      let updateDoc = {};
+      if (articleData) {
+        updateDoc = {
+          $set: {
+            ...articleData,
+          },
+        };
+      }
+      updateDoc = {
         $inc: { viewCount: 1 },
       };
+
       try {
         const result = await articlesCollection.updateOne(
           query,
@@ -334,6 +339,13 @@ async function run() {
         console.log(error);
         res.status(500).send("Internal Server Error");
       }
+    });
+
+    app.delete("/article/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await articlesCollection.deleteOne(query);
+      res.send(result)
     });
 
     // For admin to update
@@ -425,7 +437,7 @@ async function run() {
       res.send(result);
     });
     // Payment intent
-  
+
     app.get("/", (req, res) => {
       res.send("Server Running for Assignment 12");
     });
