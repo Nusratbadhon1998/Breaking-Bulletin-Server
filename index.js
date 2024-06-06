@@ -81,6 +81,21 @@ async function run() {
       }
     });
 
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      console.log(amount, "amount inside the intent");
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+
     // Verify admin
 
     const verifyAdmin = async (req, res, next) => {
@@ -162,12 +177,35 @@ async function run() {
       res.send(result);
     });
 
+    app.get('/users-count',async(req,res)=>{
+      const totalUsers = await usersCollection.countDocuments();
+      const normalUsers = await usersCollection
+      .aggregate([
+        {
+          $group: {
+            _id: "$role",
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            role: "$_id", 
+            count: 1,
+            _id: 0, 
+          },
+        },
+      ]).toArray()
+      const normalUserCount=(normalUsers).filter(user=>user.role==="user")[0].count
+      const premiumUsersCount = await usersCollection.countDocuments({ premiumTaken: { $ne: null } });
+      res.send({totalUsers,normalUserCount,premiumUsersCount})
+
+    })
     // Publisher Api
-    app.get("/publishers", verifyToken, async (req, res) => {
+    app.get("/publishers", async (req, res) => {
       const result = await publishersCollection.find().toArray();
       res.send(result);
     });
-    app.get("/articles-viewCount", verifyToken, async (req, res) => {
+    app.get("/trending-articles", async (req, res) => {
       try {
         const articles = await articlesCollection
           .find(
@@ -257,7 +295,6 @@ async function run() {
     });
     app.get("/articles/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-      console.log(email);
       if (req.user.email !== email)
         return res.status(401).send({ message: "Unauthorized access" });
       const query = { authorEmail: email };
@@ -335,7 +372,7 @@ async function run() {
 
         const totalUsers = await usersCollection.countDocuments();
         const totalArticles = await articlesCollection.countDocuments();
-  
+
         res.send({
           chartData,
         });
@@ -388,21 +425,7 @@ async function run() {
       res.send(result);
     });
     // Payment intent
-    app.post("/create-payment-intent", async (req, res) => {
-      const { price } = req.body;
-      const amount = parseInt(price * 100);
-      console.log(amount, "amount inside the intent");
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: amount,
-        currency: "usd",
-        payment_method_types: ["card"],
-      });
-
-      res.send({
-        clientSecret: paymentIntent.client_secret,
-      });
-    });
-
+  
     app.get("/", (req, res) => {
       res.send("Server Running for Assignment 12");
     });
