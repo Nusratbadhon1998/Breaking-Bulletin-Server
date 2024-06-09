@@ -84,7 +84,6 @@ async function run() {
     app.post("/create-payment-intent", async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
-      console.log(amount, "amount inside the intent");
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amount,
         currency: "usd",
@@ -107,18 +106,28 @@ async function run() {
 
       next();
     };
-    // First time user create and update premiumTaken fiend
+    // First time user create and update premiumTaken field
     app.put("/users", async (req, res) => {
       const user = req.body;
+      console.log(user);
       const query = { email: user?.email };
       const options = { upsert: true };
 
       const isUserExist = await usersCollection.findOne(query);
       let premiumReset = false;
       let updateDoc = {};
+
       if (isUserExist) {
+        updateDoc = {
+          $set: {
+            ...user,
+            name: user.name,
+            photo: user.photo,
+          },
+        };
+
         if (new Date(user.loginTime) > new Date(isUserExist.premiumTaken)) {
-          updateDoc = { $set: { ...user, premiumTaken: null } };
+          updateDoc.$set.premiumTaken = null;
           premiumReset = true;
         }
       } else {
@@ -143,16 +152,24 @@ async function run() {
         res.status(500).send("Internal Issue");
       }
     });
+
     // For admin
     app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
-      const result = await usersCollection.find().toArray();
+      const size = parseInt(req.query.size);
+      const page = parseInt(req.query.page) - 1;
+      const result = await usersCollection
+        .find()
+        .skip(page * size)
+        .limit(size)
+        .toArray();
       res.send(result);
     });
-
-    app.patch("/user/:email", async (req, res) => {
+    // For payment page
+    app.patch("/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
+      if (req.user.email !== email)
+        return res.status(403).send({ message: "Forbidden access" });
       const { premiumTakenDate } = req.body;
-
       console.log(premiumTakenDate);
 
       const query = { email };
@@ -168,7 +185,27 @@ async function run() {
         console.log(err);
       }
     });
-
+    // make admin
+    app.patch(
+      "/user/admin/:email",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const email = req.params.email;
+        const query = { email };
+        const updateDoc = {
+          $set: {
+            role: "admin",
+          },
+        };
+        try {
+          const result = await usersCollection.updateOne(query, updateDoc);
+          res.send(result);
+        } catch (err) {
+          console.log(err);
+        }
+      }
+    );
     app.get("/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       if (req.user.email !== email)
@@ -178,6 +215,7 @@ async function run() {
       res.send(result);
     });
 
+    // For home page user count
     app.get("/users-count", async (req, res) => {
       const totalUsers = await usersCollection.countDocuments();
       const normalUsers = await usersCollection
@@ -206,11 +244,12 @@ async function run() {
       res.send({ totalUsers, normalUserCount, premiumUsersCount });
     });
     // Publisher Api
+    // Home page
     app.get("/publishers", async (req, res) => {
       const result = await publishersCollection.find().toArray();
       res.send(result);
     });
-
+    // admin
     app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
       const publisherData = req.body;
       const query = {
@@ -233,15 +272,35 @@ async function run() {
       const sort = req.query.sort;
       const search = req.query.search;
 
-      let query = {};
+      let query = { status: "Approved" };
 
       if (search) query.title = { $regex: search, $options: "i" };
       if (publisher) query.publisher = publisher;
       if (tag) query.tag = tag;
       let options = {};
-      if (sort) options = { sort: { postedDate: sort === "asc" ? 1 : -1 } };
+      if (sort) options = { sort: { viewCount: sort === "true" ? -1 : 1 } };
 
       const result = await articlesCollection.find(query, options).toArray();
+      res.send(result);
+    });
+    app.get("/premium-articles", async (req, res) => {
+      const result = await articlesCollection
+        .find({ premium: "yes" })
+        .toArray();
+      res.send(result);
+    });
+    app.get("/recent-articles", async (req, res) => {
+      const options = { sort: { postedDate: -1 } };
+      const query = {};
+      const result = await articlesCollection
+        .find(query, options, {
+          projection: {
+            title: 1,
+            postedDate: 1,
+            tag: 1,
+          },
+        })
+        .toArray();
       res.send(result);
     });
     app.get("/trending-articles", async (req, res) => {
@@ -252,6 +311,9 @@ async function run() {
             {
               projection: {
                 viewCount: 1,
+                title: 1,
+                postedDate: 1,
+                tag: 1,
                 imageURL: 1,
               },
             }
@@ -345,7 +407,7 @@ async function run() {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await articlesCollection.deleteOne(query);
-      res.send(result)
+      res.send(result);
     });
 
     // For admin to update
