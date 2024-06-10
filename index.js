@@ -9,7 +9,11 @@ const app = express();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const corsOptions = {
-  origin: ["http://localhost:5173", "http://localhost:5174"],
+  origin: [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://breaking-bulletin.web.app",
+  ],
   credentials: true,
   optionSuccessStatus: 200,
 };
@@ -80,7 +84,7 @@ async function run() {
         res.status(500).send(err);
       }
     });
-
+    // stripe payment
     app.post("/create-payment-intent", async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
@@ -95,8 +99,41 @@ async function run() {
       });
     });
 
-    // Verify admin
+    // For home page user count
+    app.get("/users-count", async (req, res) => {
+      const totalUsers = await usersCollection.countDocuments();
+      const normalUsers = await usersCollection
+        .aggregate([
+          {
+            $group: {
+              _id: "$role",
+              count: { $sum: 1 },
+            },
+          },
+          {
+            $project: {
+              role: "$_id",
+              count: 1,
+              _id: 0,
+            },
+          },
+        ])
+        .toArray();
+      const normalUserCount = normalUsers.filter(
+        (user) => user.role === "user"
+      )[0].count;
+      const premiumUsersCount = await usersCollection.countDocuments({
+        premiumTaken: { $ne: null },
+      });
+      res.send({ totalUsers, normalUserCount, premiumUsersCount });
+    });
+    // Home page publisher api
+    app.get("/publishers", async (req, res) => {
+      const result = await publishersCollection.find().toArray();
+      res.send(result);
+    });
 
+    // Verify admin
     const verifyAdmin = async (req, res, next) => {
       const user = req.user;
       const query = { email: user?.email };
@@ -106,6 +143,7 @@ async function run() {
 
       next();
     };
+
     // First time user create and update premiumTaken field
     app.put("/users", async (req, res) => {
       const user = req.body;
@@ -153,22 +191,10 @@ async function run() {
       }
     });
 
-    // For admin
-    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
-      const size = parseInt(req.query.size);
-      const page = parseInt(req.query.page) - 1;
-      const result = await usersCollection
-        .find()
-        .skip(page * size)
-        .limit(size)
-        .toArray();
-      res.send(result);
-    });
     // For payment page
     app.patch("/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-      if (req.user.email !== email)
-        return res.status(403).send({ message: "Forbidden access" });
+
       const { premiumTakenDate } = req.body;
       console.log(premiumTakenDate);
 
@@ -185,27 +211,7 @@ async function run() {
         console.log(err);
       }
     });
-    // make admin
-    app.patch(
-      "/user/admin/:email",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        const email = req.params.email;
-        const query = { email };
-        const updateDoc = {
-          $set: {
-            role: "admin",
-          },
-        };
-        try {
-          const result = await usersCollection.updateOne(query, updateDoc);
-          res.send(result);
-        } catch (err) {
-          console.log(err);
-        }
-      }
-    );
+
     app.get("/user/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       if (req.user.email !== email)
@@ -215,58 +221,8 @@ async function run() {
       res.send(result);
     });
 
-    // For home page user count
-    app.get("/users-count", async (req, res) => {
-      const totalUsers = await usersCollection.countDocuments();
-      const normalUsers = await usersCollection
-        .aggregate([
-          {
-            $group: {
-              _id: "$role",
-              count: { $sum: 1 },
-            },
-          },
-          {
-            $project: {
-              role: "$_id",
-              count: 1,
-              _id: 0,
-            },
-          },
-        ])
-        .toArray();
-      const normalUserCount = normalUsers.filter(
-        (user) => user.role === "user"
-      )[0].count;
-      const premiumUsersCount = await usersCollection.countDocuments({
-        premiumTaken: { $ne: null },
-      });
-      res.send({ totalUsers, normalUserCount, premiumUsersCount });
-    });
-    // Publisher Api
-    // Home page
-    app.get("/publishers", async (req, res) => {
-      const result = await publishersCollection.find().toArray();
-      res.send(result);
-    });
-    // admin
-    app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
-      const publisherData = req.body;
-      const query = {
-        publisherName: {
-          $regex: new RegExp(`^${publisherData.publisherName}$`, "i"),
-        },
-      };
-      const alreadyExist = await publishersCollection.findOne(query);
-      if (alreadyExist) return res.send({ message: "ALready Exist" });
-      const result = await publishersCollection.insertOne(publisherData);
-      res.send(result);
-    });
-
-    // Articles Api
-
-    // Need to change
-    app.get("/articles", verifyToken, async (req, res) => {
+    // ---------------------Articles Api---------------------------------
+    app.get("/articles", async (req, res) => {
       const publisher = req.query.publisher;
       const tag = req.query.tag;
       const sort = req.query.sort;
@@ -283,7 +239,8 @@ async function run() {
       const result = await articlesCollection.find(query, options).toArray();
       res.send(result);
     });
-    app.get("/premium-articles", async (req, res) => {
+
+    app.get("/premium-articles", verifyToken, async (req, res) => {
       const result = await articlesCollection
         .find({ premium: "yes" })
         .toArray();
@@ -328,13 +285,18 @@ async function run() {
         res.status(500).json({ message: "Internal server error" });
       }
     });
-    app.get("/all-articles", verifyToken, verifyAdmin, async (req, res) => {
-      const result = await articlesCollection.find().toArray();
 
-      res.send(result);
+    // Get no of article
+    app.get("/articles-count", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await articlesCollection.countDocuments();
+      res.send({ result });
     });
+
+    // Add article
+
     app.post("/articles", verifyToken, async (req, res) => {
       const data = req.body;
+      const email = req.user.email;
 
       const articleData = {
         ...data,
@@ -343,6 +305,21 @@ async function run() {
         premium: "no",
         viewCount: 0,
       };
+
+      const user = await usersCollection.findOne({ email: email });
+      if (user?.premiumTaken === null) {
+        const totalArticles = await articlesCollection
+          .find({
+            authorEmail: email,
+          })
+          .toArray();
+        if (totalArticles.length >= 1) {
+          return res.send({
+            message:
+              "You can not post more than 1 articles as your not premium member",
+          });
+        }
+      }
 
       const result = await articlesCollection.insertOne(articleData);
 
@@ -362,7 +339,7 @@ async function run() {
       }
     });
     // get specific article
-    app.get("/article/:id", async (req, res) => {
+    app.get("/article/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       try {
@@ -372,23 +349,20 @@ async function run() {
         res.status(500).send("Internal Problem");
       }
     });
+    // add viewCount
     app.put("/article/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
+      console.log(id);
       const articleData = req?.body;
+      console.log(articleData);
       const query = { _id: new ObjectId(id) };
       const options = { upsert: true };
-      let updateDoc = {};
-      if (articleData) {
-        updateDoc = {
-          $set: {
-            ...articleData,
-          },
-        };
-      }
-      updateDoc = {
-        $inc: { viewCount: 1 },
+      const updateDoc = {
+        $set: {
+          ...articleData,
+        },
       };
-
+      
       try {
         const result = await articlesCollection.updateOne(
           query,
@@ -402,6 +376,22 @@ async function run() {
         res.status(500).send("Internal Server Error");
       }
     });
+    app.patch("/article/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $inc: { viewCount: 1 },
+      };
+      try {
+        const result = await articlesCollection.updateOne(query, updateDoc);
+
+        res.send(result);
+      } catch (error) {
+        console.log(error);
+        res.status(500).send("Internal Server Error");
+      }
+    });
+    // admin and user can delete
 
     app.delete("/article/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
@@ -410,21 +400,40 @@ async function run() {
       res.send(result);
     });
 
-    // For admin to update
-    // app.get("/admin-stat", async (req, res) => {
-    //   const articles = await articlesCollection
-    //     .find(
-    //       {},
-    //       {
-    //         projection: {
-    //           publisher: 1,
-    //         },
-    //       }
-    //     )
-    //     .toArray();
-
-    //   res.send(articles);
-    // });
+    // -------------------Admin Api------------------------------------------------------
+    // for admin get all users
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+      const size = parseInt(req.query.size);
+      const page = parseInt(req.query.page) - 1;
+      const result = await usersCollection
+        .find()
+        .skip(page * size)
+        .limit(size)
+        .toArray();
+      res.send(result);
+    });
+    // make admin
+    app.patch(
+      "/user/admin/:email",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const email = req.params.email;
+        const query = { email };
+        const updateDoc = {
+          $set: {
+            role: "admin",
+          },
+        };
+        try {
+          const result = await usersCollection.updateOne(query, updateDoc);
+          res.send(result);
+        } catch (err) {
+          console.log(err);
+        }
+      }
+    );
+    // Admin statistics
     app.get("/admin-stat", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const publisherCounts = await articlesCollection
@@ -444,8 +453,8 @@ async function run() {
         });
         chartData.unshift(["Publisher Name", "Publication article"]);
 
-        const totalUsers = await usersCollection.countDocuments();
-        const totalArticles = await articlesCollection.countDocuments();
+        // const totalUsers = await usersCollection.countDocuments();
+        // const totalArticles = await articlesCollection.countDocuments();
 
         res.send({
           chartData,
@@ -455,6 +464,7 @@ async function run() {
         res.status(500).json({ message: "Internal server error" });
       }
     });
+    // Add decline Reason
     app.put(
       "/articles/:articleId",
       verifyToken,
@@ -478,6 +488,18 @@ async function run() {
         res.send(result);
       }
     );
+    // get all articles
+    app.get("/all-articles", verifyToken, verifyAdmin, async (req, res) => {
+      const size = parseInt(req.query.size);
+      const page = parseInt(req.query.page) - 1;
+      const result = await articlesCollection
+        .find()
+        .skip(page * size)
+        .limit(size)
+        .toArray();
+      res.send(result);
+    });
+    // Status and make premium
     app.patch("/articles/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const newStatus = req.body.status;
@@ -498,7 +520,18 @@ async function run() {
       const result = await articlesCollection.updateOne(query, updateDoc);
       res.send(result);
     });
-    // Payment intent
+    app.post("/publishers", verifyToken, verifyAdmin, async (req, res) => {
+      const publisherData = req.body;
+      const query = {
+        publisherName: {
+          $regex: new RegExp(`^${publisherData.publisherName}$`, "i"),
+        },
+      };
+      const alreadyExist = await publishersCollection.findOne(query);
+      if (alreadyExist) return res.send({ message: "ALready Exist" });
+      const result = await publishersCollection.insertOne(publisherData);
+      res.send(result);
+    });
 
     app.get("/", (req, res) => {
       res.send("Server Running for Assignment 12");
